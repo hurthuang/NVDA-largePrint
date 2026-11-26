@@ -4,13 +4,21 @@
 #   （WorldVoice 在 filter 裡就套語音字典，pre_speech 拿到的已經是 DictSwitcher 換過的字，例如記號→記浩），
 #   再在 pre_speech（語音模式判斷之前，語音關掉也有）時收進來。
 # 全螢幕放大鏡會把這個視窗一起放大（又糊），所以開大字時暫停 NVDA 放大鏡，關掉再恢復。
-# 只顯示焦點與內容的文字：ui.message 的提示不收；角色、狀態、位置資訊（getPropertiesSpeech 一項一個字串）濾掉。
+# 只顯示焦點與內容的文字：ui.message 的提示不收；角色、狀態、位置資訊（getPropertiesSpeech 一項一個字串）
+#   從內容分出來，預設放在狀態列（設定可改成不顯示、跟內容一起）。
 # 大字開著時，翻頁、字大小的按鍵不停語音（包住 KeyboardInputGesture.speechEffectWhenExecuted）。
 
 import collections
 import ctypes
+import json
+import os
 import re
+import tempfile
+import threading
+import time
+import urllib.request
 
+import addonHandler
 import config
 import controlTypes
 import globalPluginHandler
@@ -45,6 +53,17 @@ SCHEMES = [
 	("whiteOnBlue", "藍底白字", (0, 0, 128), (255, 255, 255)),
 ]
 DEFAULT_FACE = "Microsoft JhengHei"
+# 輸入法選字時大字顯示什麼
+CANDIDATES = [
+	("list", "候選字和編號"),
+	("words", "候選字和相關詞（跟 NVDA 念的一樣）"),
+]
+# 角色、狀態、位置資訊（標題、表格第幾列第幾欄、清單第幾項…）放哪裡
+STRUCTURES = [
+	("status", "放在狀態列（大字視窗最上面一行的小字）"),
+	("hide", "不顯示"),
+	("inline", "跟內容一起顯示"),
+]
 
 config.conf.spec["largePrint"] = {
 	"fontSize": "integer(default=120, min=16, max=800)",
@@ -54,7 +73,114 @@ config.conf.spec["largePrint"] = {
 	"colors": "string(default=yellowOnBlack)",
 	"speakOnPage": "boolean(default=True)",
 	"showOnStartup": "boolean(default=False)",
+	"bold": "boolean(default=False)",
+	"opacity": "integer(default=80, min=50, max=100)",
+	"structure": "string(default=status)",
+	"candidateDisplay": "string(default=list)",
 }
+
+# ---- 檢查更新（跟作者其他附加元件同一套做法）----
+GITHUB_LATEST_API = "https://api.github.com/repos/hurthuang/NVDA-largePrint/releases/latest"
+RELEASES_URL = "https://github.com/hurthuang/NVDA-largePrint/releases"
+USER_AGENT = "largePrint-update-check"
+
+
+def _parseVersion(v):
+	nums = [int(p) for p in re.findall(r"\d+", v)]
+	nums += [0] * (4 - len(nums))
+	return tuple(nums[:4])
+
+
+def _currentVersion():
+	try:
+		return addonHandler.getCodeAddon().manifest.get("version", "0")
+	except Exception:
+		return "0"
+
+
+def _fromStore():
+	"""從 NVDA 附加元件商店安裝的，NVDA 會在 addons 資料夾放「<名稱>.json」；這時更新交給商店，不自己查 GitHub。"""
+	try:
+		return os.path.isfile(addonHandler.getCodeAddon().path + ".json")
+	except Exception:
+		return False
+
+
+def _checkUpdateWorker(silent=False):
+	"""silent=True 是啟動時自動檢查：沒有新版、連不上網路都不出聲。"""
+	if _fromStore():
+		if not silent:
+			wx.CallAfter(ui.message, "這個附加元件是從 NVDA 附加元件商店安裝的，請到附加元件商店更新。")
+		return
+	current = _currentVersion()
+	req = urllib.request.Request(
+		GITHUB_LATEST_API,
+		headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"},
+	)
+	try:
+		with urllib.request.urlopen(req, timeout=10) as resp:
+			data = json.loads(resp.read().decode("utf-8"))
+	except Exception as e:
+		if not silent:
+			wx.CallAfter(ui.message, f"檢查更新失敗：{e}")
+		return
+	if not data.get("tag_name"):
+		# 例如 GitHub 查詢次數超過上限，回的是錯誤訊息，不是版本
+		if not silent:
+			wx.CallAfter(ui.message, f"檢查更新失敗：{data.get('message', '沒有拿到版本資訊')}")
+		return
+	latest = data["tag_name"].lstrip("vV")
+	if _parseVersion(latest) <= _parseVersion(current):
+		if not silent:
+			wx.CallAfter(ui.message, f"目前已是最新版本（v{current}）。")
+		return
+	assetUrl = None
+	for asset in data.get("assets", []):
+		if asset.get("name", "").endswith(".nvda-addon"):
+			assetUrl = asset.get("browser_download_url")
+			break
+	wx.CallAfter(_promptUpdate, latest, current, assetUrl, data.get("html_url", RELEASES_URL))
+
+
+def _promptUpdate(latest, current, assetUrl, releaseUrl):
+	"""主執行緒問使用者；按是才下載，交給 NVDA 原本的安裝流程。"""
+	if not assetUrl:
+		ui.browseableMessage(
+			f"有新版本可更新：v{latest}（目前使用：v{current}）\n\n下載頁面：\n{releaseUrl}",
+			"大字顯示有新版本",
+		)
+		return
+	result = gui.messageBox(
+		f"大字顯示有新版本 v{latest}（目前使用：v{current}）。\n\n是否立即下載並安裝？",
+		"大字顯示有新版本",
+		wx.YES_NO | wx.ICON_QUESTION,
+	)
+	if result == wx.YES:
+		ui.message("正在下載更新…")
+		threading.Thread(target=_downloadAndInstallWorker, args=(assetUrl,), daemon=True).start()
+
+
+def _downloadAndInstallWorker(assetUrl):
+	req = urllib.request.Request(assetUrl, headers={"User-Agent": USER_AGENT})
+	try:
+		with urllib.request.urlopen(req, timeout=30) as resp:
+			content = resp.read()
+	except Exception as e:
+		wx.CallAfter(ui.message, f"下載更新失敗：{e}")
+		return
+	tmpPath = os.path.join(tempfile.gettempdir(), "largePrint-update.nvda-addon")
+	try:
+		with open(tmpPath, "wb") as f:
+			f.write(content)
+	except Exception as e:
+		wx.CallAfter(ui.message, f"儲存更新檔失敗：{e}")
+		return
+	# 交給系統開啟，跑 NVDA 原本的附加元件安裝確認
+	wx.CallAfter(os.startfile, tmpPath)
+
+
+def checkForUpdate(silent=False):
+	threading.Thread(target=_checkUpdateWorker, kwargs={"silent": silent}, daemon=True).start()
 
 
 # 不放在行首的標點（放不下時掛在上一行尾）
@@ -97,14 +223,55 @@ def colors():
 	return wx.Colour(*bg), wx.Colour(*fg), wx.Colour(*dim)
 
 
+_PLACEHOLDER_RE = re.compile(r"\{\w*\}|%[sd]")
+
+
+def _fmtRe(fmt, subs=None):
+	"""把翻譯好的格式字串變成正規式：{名稱}、%s、%d 換成 subs 裡的式子，沒給的當數字。"""
+	subs = subs or {}
+	out, pos = [], 0
+	for m in _PLACEHOLDER_RE.finditer(fmt):
+		out.append(re.escape(fmt[pos : m.start()]))
+		name = m.group(0).strip("{}%") if m.group(0).startswith("{") else m.group(0)
+		out.append(subs.get(name, r"\d+"))
+		pos = m.end()
+	out.append(re.escape(fmt[pos:]))
+	return "".join(out)
+
+
+def _plurals(singular, plural):
+	"""ngettext 的單數、複數兩種翻譯。"""
+	return {ngettext(singular, plural, 1), ngettext(singular, plural, 2)}  # noqa: F821（NVDA 內建）
+
+
 def _buildNoise():
-	"""角色、狀態的念法（NVDA 目前語言），整個字串相同才濾掉。"""
+	"""角色、狀態、位置資訊的念法（NVDA 目前語言），整個字串相同（或符合句型）才算。
+	句型照 NVDA speech.py 的 getControlFieldSpeech、getPropertiesSpeech、getTableInfoSpeech 等。"""
 	words = set()
+	roleTexts = set()
 	for role in controlTypes.Role:
 		try:
 			words.add(role.displayString)
+			roleTexts.add(role.displayString)
 		except Exception:
 			pass
+	try:
+		import aria
+
+		landmark = controlTypes.Role.LANDMARK.displayString
+		for name in aria.landmarkRoles.values():
+			words.add(f"{name} {landmark}")
+			roleTexts.add(f"{name} {landmark}")
+	except Exception:
+		pass
+	try:
+		for cur in controlTypes.IsCurrent:
+			if cur != controlTypes.IsCurrent.NO:
+				words.add(cur.displayString)
+	except Exception:
+		pass
+	for s in (_("out of table"), _("has details")):
+		words.add(s)
 	for state in controlTypes.State:
 		# 沒有翻譯的狀態會在 nvda.log 記錯誤，先查有沒有標籤
 		try:
@@ -118,25 +285,89 @@ def _buildNoise():
 			except Exception:
 				pass
 	words.discard("")
-	pats = []
-	for fmt, keys in ((_("{number} of {total}"), ("{number}", "{total}")), (_("level %s"), ("%s",))):
-		p = re.escape(fmt)
-		for k in keys:
-			p = p.replace(re.escape(k), r"\d+")
-		pats.append(p)
-	return words, re.compile("^(?:" + "|".join(pats) + ")$")
+	roleTexts.discard("")
+	roles = "(?:" + "|".join(re.escape(r) for r in sorted(roleTexts, key=len, reverse=True)) + ")"
+	rowCount = "(?:" + "|".join(_fmtRe(f) for f in _plurals("{rowCount} row", "{rowCount} rows")) + ")"
+	colCount = "(?:" + "|".join(_fmtRe(f) for f in _plurals("{columnCount} column", "{columnCount} columns")) + ")"
+	pats = [
+		_fmtRe(_("{number} of {total}")),
+		_fmtRe(_("level %s")),
+		_fmtRe(_("heading level %d")),
+		_fmtRe(_("row %s")),
+		_fmtRe(_("column %s")),
+		_fmtRe(_("through {endRow}")),
+		_fmtRe(_("through {endCol}")),
+		_fmtRe(_("through row {row} column {column}")),
+		_fmtRe(_("column {0} of {1}")),
+		_fmtRe(_("with {rowCountTranslation} and {colCountTranslation}"),
+			{"rowCountTranslation": rowCount, "colCountTranslation": colCount}),
+		_fmtRe(_("table with {columnCountText} and {rowCountText}"),
+			{"columnCountText": colCount, "rowCountText": rowCount}),
+		# 離開清單、離開 導覽 地標（roleText 用空格接起來）
+		_fmtRe(_("out of %s"), {"%s": f"{roles}(?: {roles})*"}),
+		_fmtRe(_("has %s"), {"%s": roles}),
+	]
+	for singular, plural in (
+		("with %s column", "with %s columns"),
+		("with %s row", "with %s rows"),
+		("with %s item", "with %s items"),
+		("%s column", "%s columns"),
+	):
+		pats.extend(_fmtRe(f) for f in _plurals(singular, plural))
+	return words, re.compile("^(?:" + "|".join(f"(?:{p})" for p in pats) + ")$")
 
 
-def wrapText(dc, text, maxWidth):
-	"""中文逐字、英文以字為單位斷行。"""
+def locateCaret(text, lines, offset):
+	"""原文第 offset 個字在斷好的行裡是第幾行第幾個字 (li, ci)。
+	wrapText 會把空白縮成一格、拿掉行首空白，所以逐字對回原文。游標在最後面時 ci＝那一行的長度。"""
+	p = 0
+	for li, line in enumerate(lines):
+		for ci, ch in enumerate(line):
+			if ch == " ":
+				while p < len(text) and not text[p].isspace():
+					p += 1
+				idx = p
+				p += 1
+				# 斷行時縮成一格的空白：後面不是空白就把整串吃掉
+				if not (ci + 1 < len(line) and line[ci + 1] == " "):
+					while p < len(text) and text[p].isspace() and text[p] != "\n":
+						p += 1
+			else:
+				idx = text.find(ch, p)
+				if idx < 0:
+					return None
+				p = idx + 1
+			if idx >= offset or (ch == " " and p > offset):
+				return li, ci
+		# 游標在這一行最後面（後面還有別行）：畫在行尾
+		if li + 1 < len(lines):
+			j = p
+			while j < len(text) and text[j].isspace():
+				j += 1
+			if offset < j:
+				return li, len(line)
+	if not lines:
+		return None
+	return len(lines) - 1, len(lines[-1])
+
+
+def wrapText(dc, text, maxWidth, keepSpaces=False):
+	"""中文逐字、英文以字為單位斷行。keepSpaces：編輯區照原文保留每一個空白（游標才對得上）。"""
 	lines = []
 	for para in text.split("\n"):
 		line, lineW = "", 0
+		first = True
 		for tok in TOKEN_RE.findall(para):
 			if tok.isspace():
-				if not line:
-					continue
-				tok = " "
+				if keepSpaces:
+					if not line and not first:
+						continue  # 斷行處的空白不放到下一行開頭
+					tok = tok.replace("\t", " ")  # Tab 換成空白；全形空白照留（候選字之間）
+				else:
+					if not line:
+						continue
+					tok = " "
+			first = False
 			w = dc.GetTextExtent(tok)[0]
 			if lineW + w <= maxWidth or not line:
 				if w > maxWidth and len(tok) > 1:
@@ -157,21 +388,46 @@ def wrapText(dc, text, maxWidth):
 				line, lineW = "", 0
 			else:
 				lines.append(line.rstrip())
-				if tok == " ":
+				if tok.isspace():
 					line, lineW = "", 0
 				else:
 					line, lineW = tok, w
-		lines.append(line.rstrip())
-	while lines and not lines[-1]:
+		lines.append(line if keepSpaces else line.rstrip())
+	if keepSpaces:
+		# 編輯區的空白行也要顯示（游標畫在那一行）
+		return lines or [""]
+	while lines and not lines[-1].strip():
 		lines.pop()
 	return lines
 
 
 def makeFont(px):
-	font = wx.Font(wx.FontInfo(wx.Size(0, px)).FaceName(conf()["fontFace"]))
+	bold = conf()["bold"]
+	font = wx.Font(wx.FontInfo(wx.Size(0, px)).FaceName(conf()["fontFace"]).Bold(bold))
 	if not font.IsOk():
-		font = wx.Font(wx.FontInfo(wx.Size(0, px)).FaceName(DEFAULT_FACE))
+		font = wx.Font(wx.FontInfo(wx.Size(0, px)).FaceName(DEFAULT_FACE).Bold(bold))
 	return font
+
+
+def _isCandidate(obj):
+	try:
+		from NVDAObjects.behaviors import CandidateItem
+
+		return isinstance(obj, CandidateItem)
+	except Exception:
+		return False
+
+
+def _composing():
+	"""輸入法正在組字或選字（焦點是 InputComposition 或候選字）。"""
+	try:
+		import api
+		from NVDAObjects.inputComposition import InputComposition
+
+		focus = api.getFocusObject()
+		return isinstance(focus, InputComposition) or _isCandidate(focus)
+	except Exception:
+		return False
 
 
 def focusSpan():
@@ -212,6 +468,11 @@ class BigTextFrame(wx.Frame):
 		self.pageCount = 1
 		self.pageLines = []
 		self.status = ""
+		self.info = ""
+		self.caretPos = None  # (這一頁第幾行, 第幾個字)
+		self.compMarks = []
+		self.selMarks = []
+		self._lastY = None
 		self.statusPx = 16
 		self.lineH = 0
 		self.margin = 8
@@ -225,6 +486,7 @@ class BigTextFrame(wx.Frame):
 		ex |= WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_NOACTIVATE
 		user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex)
 		user32.SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)
+		self._alpha = 255
 
 	def _place(self, geo, h):
 		"""依設定決定視窗的 y。"""
@@ -234,6 +496,9 @@ class BigTextFrame(wx.Frame):
 			return top
 		if mode == "bottom":
 			return bottom
+		if _composing() and self._lastY is not None:
+			# 輸入法組字時游標位置不準，視窗留在原地不跳
+			return min(max(top, self._lastY), bottom)
 		span = focusSpan()
 		if mode == "follow" and span:
 			fTop, fBottom = span
@@ -248,10 +513,29 @@ class BigTextFrame(wx.Frame):
 			self.atTop = (span[0] + span[1]) // 2 > geo.y + geo.height // 2
 		return top if self.atTop else bottom
 
+	@staticmethod
+	def _marks(text, lines, span, perPage, page):
+		marks = []
+		if not span or span[1] <= span[0]:
+			return marks
+		a = locateCaret(text, lines, span[0])
+		b = locateCaret(text, lines, span[1])
+		if not (a and b):
+			return marks
+		for li in range(a[0], b[0] + 1):
+			if li // perPage != page:
+				continue
+			c0 = a[1] if li == a[0] else 0
+			c1 = b[1] if li == b[0] else len(lines[li])
+			if c1 > c0:
+				marks.append((li - page * perPage, c0, c1))
+		return marks
+
 	def update(self):
 		"""重新排版、決定大小與位置，然後重畫。"""
-		text, sentStatus = self.plugin.currentView()
-		if not text:
+		text, sentStatus, info, caret = self.plugin.currentView()
+		self.info = info if conf()["structure"] == "status" else ""
+		if not text and caret is None:
 			self.Hide()
 			return
 		geo = wx.Display(0).GetGeometry()
@@ -261,7 +545,32 @@ class BigTextFrame(wx.Frame):
 		dc = wx.ScreenDC()
 		dc.SetFont(makeFont(size))
 		self.lineH = int(dc.GetTextExtent("國")[1] * 1.15)
-		lines = wrapText(dc, text, geo.width - 2 * margin)
+		compSpan = selSpan = None
+		if isinstance(caret, tuple):
+			parts = caret
+			caret, compStart, compEnd = parts[:3]
+			compSpan = (compStart, compEnd)
+			selSpan = parts[3] if len(parts) > 3 else None
+			cands = parts[4] if len(parts) > 4 else None
+			if cands:
+				# 候選字：只放選到的字附近、一行放得下的那幾個，選字移動時跟著捲動
+				labels, si, offset = cands
+				sep = "　"
+				maxW = geo.width - 2 * margin
+
+				def width(a, b):
+					return dc.GetTextExtent(sep.join(labels[a:b]))[0]
+
+				start = 0
+				while start < si and width(start, si + 1) > maxW:
+					start += 1
+				end = si + 1
+				while end < len(labels) and width(start, end + 1) <= maxW:
+					end += 1
+				text = text[:offset] + sep.join(labels[start:end])
+				s0 = offset + len(sep.join(labels[start:si])) + (1 if si > start else 0)
+				selSpan = (s0, s0 + len(labels[si]))
+		lines = wrapText(dc, text, geo.width - 2 * margin, keepSpaces=caret is not None)
 		self.statusPx = max(16, size // 3)
 		dc.SetFont(makeFont(self.statusPx))
 		statusLineH = dc.GetTextExtent("國")[1]
@@ -270,16 +579,33 @@ class BigTextFrame(wx.Frame):
 		pages = [lines[i : i + perPage] for i in range(0, len(lines), perPage)] or [[]]
 		self.pageCount = len(pages)
 		page = self.plugin.pageIndex
+		loc = locateCaret(text, lines, caret) if caret is not None else None
+		if loc and self.plugin._jumpToCaret:
+			# 編輯區那一行很長時，翻到游標所在的那一頁
+			page = loc[0] // perPage
+		self.plugin._jumpToCaret = False
 		if page < 0 or page >= len(pages):
 			page = len(pages) - 1 if page < 0 else 0
 		self.plugin.pageIndex = page
 		self.pageLines = pages[page]
+		self.caretPos = None
+		if loc and loc[0] // perPage == page:
+			self.caretPos = (loc[0] - page * perPage, loc[1])
+		# 組字中的字畫底線、選到的候選字反白：[(這一頁第幾行, 從第幾個字, 到第幾個字)]
+		self.compMarks = self._marks(text, lines, compSpan, perPage, page)
+		self.selMarks = self._marks(text, lines, selSpan, perPage, page)
 		parts = [s for s in (sentStatus, f"第 {page + 1}／{len(pages)} 頁" if len(pages) > 1 else "") if s]
 		self.status = "　".join(parts)
-		self.statusH = statusLineH if self.status else 0
+		# 狀態列一直留著：組字的注音、角色資訊一下有一下沒有時，視窗高度才不會跟著變
+		self.statusH = statusLineH
 		# 同一句各頁高度一樣，翻頁時視窗不跳
 		h = min(len(lines), perPage) * self.lineH + 2 * margin + self.statusH
-		y = self._place(geo, h)
+		y = self._lastY = self._place(geo, h)
+		alpha = 255 * min(100, max(50, conf()["opacity"])) // 100
+		if alpha != self._alpha:
+			# 整個視窗（底色和字）一起半透明，看得到後面的畫面
+			user32.SetLayeredWindowAttributes(self.GetHandle(), 0, alpha, LWA_ALPHA)
+			self._alpha = alpha
 		user32.SetWindowPos(self.GetHandle(), HWND_TOPMOST, geo.x, y, geo.width, h, SWP_NOACTIVATE)
 		if not self.IsShown():
 			self.ShowWithoutActivating()
@@ -292,16 +618,65 @@ class BigTextFrame(wx.Frame):
 		dc.SetBackground(wx.Brush(bg))
 		dc.Clear()
 		m = self.margin
-		if self.status:
+		if self.status or self.info:
 			dc.SetFont(makeFont(self.statusPx))
 			dc.SetTextForeground(dim)
-			sw = dc.GetTextExtent(self.status)[0]
-			dc.DrawText(self.status, w - m - sw, m // 2)
+			sw = 0
+			if self.status:
+				sw = dc.GetTextExtent(self.status)[0]
+				dc.DrawText(self.status, w - m - sw, m // 2)
+			if self.info:
+				# 左邊放角色狀態位置資訊，太長就截掉
+				room = w - 2 * m - (sw + self.statusPx if sw else 0)
+				info = self.info
+				if dc.GetTextExtent(info)[0] > room:
+					while info and dc.GetTextExtent(info + "…")[0] > room:
+						info = info[:-1]
+					info += "…"
+				dc.DrawText(info, m, m // 2)
 		dc.SetFont(makeFont(self.fontPx))
 		dc.SetTextForeground(fg)
 		y = m + self.statusH
-		for line in self.pageLines:
+		for i, line in enumerate(self.pageLines):
 			dc.DrawText(line, m, y)
+			for li, c0, c1 in self.selMarks:
+				if li == i:
+					# 選到的候選字：反白
+					x0 = m + dc.GetTextExtent(line[:c0])[0]
+					seg = line[c0:c1]
+					sw, sh = dc.GetTextExtent(seg)
+					dc.SetPen(wx.TRANSPARENT_PEN)
+					dc.SetBrush(wx.Brush(fg))
+					dc.DrawRectangle(x0, y, sw, sh)
+					dc.SetTextForeground(bg)
+					dc.DrawText(seg, x0, y)
+					dc.SetTextForeground(fg)
+			for li, c0, c1 in self.compMarks:
+				if li == i:
+					# 組字中（還沒送出）的字畫底線
+					x0 = m + dc.GetTextExtent(line[:c0])[0]
+					x1 = m + dc.GetTextExtent(line[:c1])[0]
+					th = max(2, self.fontPx // 16)
+					dc.SetPen(wx.TRANSPARENT_PEN)
+					dc.SetBrush(wx.Brush(fg))
+					dc.DrawRectangle(x0, y + self.lineH - th, x1 - x0, th)
+			if self.caretPos and self.caretPos[0] == i:
+				# 游標的字：反白（底色、字色對調）；游標在行尾就畫一條直線
+				ci = self.caretPos[1]
+				x = m + dc.GetTextExtent(line[:ci])[0]
+				if ci < len(line):
+					ch = line[ci]
+					cw, chH = dc.GetTextExtent(ch)
+					dc.SetPen(wx.TRANSPARENT_PEN)
+					dc.SetBrush(wx.Brush(fg))
+					dc.DrawRectangle(x, y, max(cw, self.fontPx // 3), chH)
+					dc.SetTextForeground(bg)
+					dc.DrawText(ch, x, y)
+					dc.SetTextForeground(fg)
+				else:
+					dc.SetPen(wx.TRANSPARENT_PEN)
+					dc.SetBrush(wx.Brush(fg))
+					dc.DrawRectangle(x + 2, y, max(3, self.fontPx // 12), self.lineH)
 			y += self.lineH
 
 
@@ -328,13 +703,31 @@ class BigTextSettingsPanel(SettingsPanel):
 		self.faces = faces
 		self.face = h.addLabeledControl("字型(&F):", wx.Choice, choices=faces)
 		self.face.SetSelection(faces.index(c["fontFace"]))
+		self.bold = h.addItem(wx.CheckBox(self, label="粗體(&B)"))
+		self.bold.SetValue(c["bold"])
 		self.scheme = h.addLabeledControl("配色(&C):", wx.Choice, choices=[s[1] for s in SCHEMES])
 		skeys = [s[0] for s in SCHEMES]
 		self.scheme.SetSelection(skeys.index(c["colors"]) if c["colors"] in skeys else 0)
+		self.opacity = h.addLabeledControl(
+			"不透明度（百分比，100＝不透明）(&T):", nvdaControls.SelectOnFocusSpinCtrl,
+			min=50, max=100, initial=c["opacity"],
+		)
+		self.structure = h.addLabeledControl(
+			"標題層級、表格欄列等位置資訊(&I):", wx.Choice, choices=[label for _k, label in STRUCTURES],
+		)
+		tkeys = [k for k, _label in STRUCTURES]
+		self.structure.SetSelection(tkeys.index(c["structure"]) if c["structure"] in tkeys else 0)
+		self.candidate = h.addLabeledControl(
+			"輸入法選字時顯示(&W):", wx.Choice, choices=[label for _k, label in CANDIDATES],
+		)
+		ckeys = [k for k, _label in CANDIDATES]
+		self.candidate.SetSelection(ckeys.index(c["candidateDisplay"]) if c["candidateDisplay"] in ckeys else 0)
 		self.speakOnPage = h.addItem(wx.CheckBox(self, label="翻頁時語音跟著念這一頁(&R)"))
 		self.speakOnPage.SetValue(c["speakOnPage"])
 		self.showOnStartup = h.addItem(wx.CheckBox(self, label="NVDA 啟動時開啟大字顯示(&O)"))
 		self.showOnStartup.SetValue(c["showOnStartup"])
+		updateButton = h.addItem(wx.Button(self, label="檢查更新(&U)"))
+		updateButton.Bind(wx.EVT_BUTTON, lambda evt: checkForUpdate(silent=False))
 
 	def onSave(self):
 		c = conf()
@@ -343,6 +736,10 @@ class BigTextSettingsPanel(SettingsPanel):
 		c["fontSize"] = self.size.GetValue()
 		c["fontFace"] = self.faces[self.face.GetSelection()]
 		c["colors"] = SCHEMES[self.scheme.GetSelection()][0]
+		c["bold"] = self.bold.GetValue()
+		c["opacity"] = self.opacity.GetValue()
+		c["structure"] = STRUCTURES[self.structure.GetSelection()][0]
+		c["candidateDisplay"] = CANDIDATES[self.candidate.GetSelection()][0]
 		c["speakOnPage"] = self.speakOnPage.GetValue()
 		c["showOnStartup"] = self.showOnStartup.GetValue()
 		if _plugin:
@@ -372,6 +769,21 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._suppress = 0
 		self._magWasOn = False
 		self._raw = None
+		self._lineTimer = None
+		self._pendingInfo = ""
+		self._pendingFallback = ""
+		self._lastLine = None  # 上一次顯示的編輯區那一行（TextInfo），判斷是不是同一行
+		self._jumpToCaret = False  # 下次排版時翻到游標那一頁
+		self._editLine = None  # 最近一次顯示的編輯區那一行 (文字, 游標)，選字時放在上面
+		self._candEntry = False  # 最新一句是選字的顯示
+		self._focusAt = 0.0
+		self._roleWords = set()
+		for role in controlTypes.Role:
+			try:
+				self._roleWords.add(role.displayString)
+			except Exception:
+				pass
+		self._roleWords.discard("")
 		self._quietIds = {inputCore.normalizeGestureIdentifier(g) for g in self._shownGestures}
 		try:
 			self._noiseWords, self._noiseRe = _buildNoise()
@@ -434,6 +846,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 		pre_speech.register(self.onPreSpeech)
 		NVDASettingsDialog.categoryClasses.append(BigTextSettingsPanel)
+		# 啟動後背景檢查一次更新（延遲幾秒，不搶 NVDA 啟動）；有新版才問，沒有就不出聲
+		wx.CallLater(5000, checkForUpdate, True)
 		# 啟動時開啟：等 NVDA 啟動完成（放大鏡已經啟動）才開，才能暫停放大鏡
 		if conf()["showOnStartup"]:
 			try:
@@ -456,6 +870,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def terminate(self):
 		global _plugin
 		pre_speech.unregister(self.onPreSpeech)
+		if self._lineTimer:
+			self._lineTimer.Stop()
+			self._lineTimer = None
 		ui.message = self._origUiMessage
 		try:
 			del filter_speechSequence.apply
@@ -483,27 +900,35 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def _markSegments(self, seq):
 		"""用原文（還沒經過任何 filter）切段：遇到 CallbackCommand（讀出全部每一塊開頭的 lineReached）就分段。
 		每段前面插一個自己的 CallbackCommand，語音念到那裡才換大字，讀出全部時才會跟著跑。"""
-		segments = []  # (插入位置, 文字)
-		parts = []
+		mode = conf()["structure"]
+		segments = []  # (插入位置, 內容, 角色狀態位置資訊)
+		parts, infos = [], []
 		start = 0
+
+		def flush():
+			if parts or (infos and mode == "status"):
+				segments.append((start, " ".join(parts), " ".join(infos)))
+
 		for i, item in enumerate(seq):
 			if isinstance(item, CallbackCommand):
-				if parts:
-					segments.append((start, " ".join(parts)))
-				parts = []
+				flush()
+				parts, infos = [], []
 				start = i + 1
 			elif isinstance(item, str):
 				s = item.strip()
-				if s and s not in self._noiseWords and not self._noiseRe.match(s):
+				if not s:
+					continue
+				if mode != "inline" and (s in self._noiseWords or self._noiseRe.match(s)):
+					infos.append(s)
+				else:
 					parts.append(s)
-		if parts:
-			segments.append((start, " ".join(parts)))
-		self._raw = [t for _i, t in segments]
+		flush()
+		self._raw = [(t, info) for _i, t, info in segments]
 		if not segments:
 			return seq
 		out = list(seq)
-		for pos, text in reversed(segments):
-			out.insert(pos, CallbackCommand(lambda t=text: self._spoken(t), name="largePrint:segment"))
+		for pos, text, info in reversed(segments):
+			out.insert(pos, CallbackCommand(lambda t=text, f=info: self._spoken(t, f), name="largePrint:segment"))
 		return out
 
 	def _speechIsAudible(self):
@@ -525,30 +950,319 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if self._speechIsAudible():
 			return  # 念到每一段時由 CallbackCommand 換大字
 		# 語音關掉、隨選模式、語音引擎不回報進度：直接顯示
-		for text in segments:
-			self._addText(text)
+		if self._editLineMode() and not self._isFocusSpeech(segments[-1][1]):
+			text, info = segments[-1]
+			self._scheduleCaretLine(info, text)
+			return
+		for text, info in segments:
+			self._addText(text, info)
 		if self.shown:
 			wx.CallAfter(self._refresh)
 
-	def _spoken(self, text):
+	def _spoken(self, text, info=""):
 		if self._suppress:
 			return
-		self._addText(text)
+		if self._editLineMode() and not self._isFocusSpeech(info):
+			# 編輯區（打字、輸入法送字、方向鍵）：不顯示念的那一個字，改顯示游標那一行
+			self._scheduleCaretLine(info, text)
+			return
+		self._addText(text, info)
 		if self.shown:
 			self._refresh()
 
-	def _addText(self, text):
-		if not (self.history and self.history[-1] == text and self.browseIndex is None):
-			self.history.append(text)
+	def _addText(self, text, info="", caret=None):
+		"""history 每一項是 (內容, 角色狀態位置資訊, 游標位置或 None)。"""
+		if not text:
+			# 只有資訊（例如按空白鍵後的「未勾選」）：是在講目前這一項，更新最新一句的狀態列
+			if self.history:
+				t, _info, c = self.history[-1]
+				self.history[-1] = (t, info, c)
+				self.browseIndex = None
+			return
+		self._lastLine = None
+		self._candEntry = False
+		if self.history and self.history[-1][0] == text and self.browseIndex is None:
+			self.history[-1] = (text, info or self.history[-1][1], caret)
+		else:
+			self.history.append((text, info, caret))
 		self.browseIndex = None
 		self.pageIndex = 0
 
+	# ---- 編輯區：顯示游標那一行 ----
+	def _editFocus(self):
+		"""目前在編輯區（不是瀏覽模式、不是密碼欄、不在讀出全部）就傳回編輯區物件，不然 None。
+		輸入法組字時焦點是 InputComposition，用它的 parent（文件本身）。"""
+		try:
+			import api
+
+			if api.isTypingProtected():
+				return None
+			try:
+				from speech.sayAll import SayAllHandler
+
+				if SayAllHandler.isRunning():
+					return None  # 讀出全部照原本逐段跟著
+			except Exception:
+				pass
+			focus = api.getFocusObject()
+			try:
+				from NVDAObjects.inputComposition import InputComposition
+
+				if isinstance(focus, InputComposition):
+					focus = focus.parent
+			except Exception:
+				pass
+			ti = focus.treeInterceptor
+			if ti is not None and not getattr(ti, "passThrough", True):
+				return None
+			# Word 文件的角色是「文件」、沒有「可編輯」狀態，所以也看 NVDA 的 EditableText 類別
+			try:
+				from editableText import EditableText
+
+				if isinstance(focus, EditableText):
+					return focus
+			except Exception:
+				pass
+			if controlTypes.State.EDITABLE in focus.states or focus.role == controlTypes.Role.EDITABLETEXT:
+				return focus
+		except Exception:
+			pass
+		return None
+
+	def _editLineMode(self):
+		return self._editFocus() is not None
+
+	def _isFocusSpeech(self, info):
+		"""有角色（「編輯區」「按鈕」…）的是換焦點時念的，照原本顯示（看得到欄位名稱）。"""
+		return bool(info) and any(w in self._roleWords for w in info.split())
+
+	def event_gainFocus(self, obj, nextHandler):
+		if _isCandidate(obj):
+			# 選字：NVDA 念的字詞解釋不收，改顯示文件那一行＋這一頁的候選字
+			self._suppress += 1
+			try:
+				nextHandler()
+			finally:
+				self._suppress -= 1
+			try:
+				self._showCandidates(obj)
+			except Exception:
+				log.debugWarning("largePrint: 顯示候選字失敗", exc_info=True)
+			return
+		wasCandidate = self._candEntry
+		self._focusAt = time.time()
+		if not wasCandidate:
+			self._lastLine = None
+			nextHandler()
+		else:
+			# 選好字回到文件時 NVDA 可能再念一次文件名稱，不收
+			self._suppress += 1
+			try:
+				nextHandler()
+			finally:
+				self._suppress -= 1
+		if wasCandidate and self._editLineMode():
+			# 選好字回到文件：顯示送出後的那一行
+			self._scheduleCaretLine()
+
+	def event_foreground(self, obj, nextHandler):
+		# 選字框出現時 NVDA 會念輸入法視窗的名稱（「Windows 輸入體驗」），不收
+		if _isCandidate(obj):
+			self._suppress += 1
+			try:
+				nextHandler()
+			finally:
+				self._suppress -= 1
+			return
+		nextHandler()
+
+	def _showCandidates(self, obj):
+		mode = conf()["candidateDisplay"]
+		info = ""
+		sel = None
+		cands = None
+		if mode == "words":
+			second = obj.name or ""
+			if obj.description:
+				second += ", " + obj.description
+			sel = None
+		else:
+			# 這一頁看得到的候選字：1家　2加　3佳…（照 NVDA 的 visibleCandidateItemsText 走法）
+			before, after = [], []
+			o = obj.previous
+			while _isCandidate(o) and isinstance(o.candidateNumber, int) and controlTypes.State.INVISIBLE not in o.states:
+				before.append(o)
+				o = o.previous
+			o = obj.next
+			while _isCandidate(o) and isinstance(o.candidateNumber, int) and controlTypes.State.INVISIBLE not in o.states:
+				after.append(o)
+				o = o.next
+			items = list(reversed(before)) + [obj] + after
+			parts = []
+			pos = 0
+			for i, it in enumerate(items):
+				label = f"{it.candidateNumber}{it.basicText}" if isinstance(it.candidateNumber, int) else it.basicText
+				if it is obj:
+					sel = (pos, pos + len(label))
+					selIndex = i
+				parts.append(label)
+				pos += len(label) + 1
+			second = "\u3000".join(parts)
+			cands = (parts, selIndex)
+			# 選到的字的第一個相關詞（例如「加油的加」）放狀態列，分辨同音字
+			info = self._firstDescription(obj.basicText)
+		# 上面一行：文件那一行（組字畫底線）；下面一行：候選字
+		first, caretValue = self._editLine if self._editLine else ("", None)
+		if first.strip() or caretValue is not None:
+			text = first + "\n" + second
+			offset = len(first) + 1
+		else:
+			text, offset = second, 0
+			caretValue = None
+		if isinstance(caretValue, tuple):
+			c, cs, ce = caretValue[:3]
+		elif caretValue is not None:
+			c, cs, ce = caretValue, 0, 0
+		else:
+			c, cs, ce = len(text), 0, 0
+		selSpan = (sel[0] + offset, sel[1] + offset) if sel else None
+		# 候選字一行放不下時，由排版只取選到的字附近放得下的那幾個（跟著捲動，文件那一行一直留著）
+		value = (c, cs, ce, selSpan, (cands[0], cands[1], offset) if cands else None)
+		if self._candEntry or (self._lastLine is not None and self.history and self.browseIndex is None):
+			self.history[-1] = (text, info, value)
+		elif self.history and self.browseIndex is None and self._editLine and self.history[-1][0] == first:
+			self.history[-1] = (text, info, value)
+		else:
+			self.history.append((text, info, value))
+		self._candEntry = True
+		self.browseIndex = None
+		self.pageIndex = 0
+		self._jumpToCaret = False
+		self._refresh()
+
+	@staticmethod
+	def _firstDescription(candidate):
+		if not candidate or len(candidate) != 1:
+			return ""
+		try:
+			import characterProcessing
+
+			descs = characterProcessing.getCharacterDescription(speech.getCurrentLanguage(), candidate) or []
+		except Exception:
+			return ""
+		if not descs:
+			return ""
+		d = descs[0]
+		if d.startswith("(") and d.endswith(")"):
+			d = d[1:-1]
+		return d
+
+	def _scheduleCaretLine(self, info="", fallback=""):
+		"""等程式把字放進去、游標移好再讀那一行；連續的只讀最後一次。"""
+		if info:
+			self._pendingInfo = info
+		if fallback:
+			self._pendingFallback = fallback
+		try:
+			if self._lineTimer:
+				self._lineTimer.Stop()
+			self._lineTimer = wx.CallLater(80, self._showCaretLine)
+		except Exception:
+			log.debugWarning("largePrint: 排游標行失敗", exc_info=True)
+
+	def event_typedCharacter(self, obj, nextHandler, ch):
+		nextHandler()
+		if self._editLineMode():
+			self._scheduleCaretLine()
+
+	def event_caret(self, obj, nextHandler):
+		# 打字、輸入法送字、方向鍵都會移動游標（打字回音、游標朗讀關掉時也跟著）
+		nextHandler()
+		# 剛換焦點時的游標事件不算，保留 NVDA 念的欄位名稱
+		if time.time() - self._focusAt > 0.5 and self._editLineMode():
+			self._scheduleCaretLine()
+
+	def _showCaretLine(self):
+		self._lineTimer = None
+		info, fallback = self._pendingInfo, self._pendingFallback
+		self._pendingInfo = self._pendingFallback = ""
+		obj = self._editFocus()
+		if obj is None:
+			if fallback:
+				self._addText(fallback, info)
+				self._refresh()
+			return
+		try:
+			import textInfos
+
+			caret = obj.makeTextInfo(textInfos.POSITION_CARET)
+			line = caret.copy()
+			line.expand(textInfos.UNIT_LINE)
+			text = line.text.rstrip("\r\n")
+			before = line.copy()
+			before.setEndPoint(caret, "endToStart")
+			offset = len(before.text)
+		except Exception:
+			log.debugWarning("largePrint: 讀游標那一行失敗", exc_info=True)
+			if fallback:
+				self._addText(fallback, info)
+				self._refresh()
+			return
+		# 輸入法組字中的注音、字（跟點字一樣）放進大字：
+		# Word 這類會把組字放進文件裡的，標出那一段；組字在另外小視窗的，插在游標的位置
+		caretValue = offset
+		try:
+			import api
+			from NVDAObjects.inputComposition import InputComposition
+
+			comp = api.getFocusObject()
+			if isinstance(comp, InputComposition):
+				s = comp.readingString if comp.isReading else comp.compositionString
+				s = s.strip("\u3000")
+				if s:
+					lo = max(0, offset - len(s))
+					k = text.find(s, lo, offset + len(s))
+					if k >= 0:
+						start = k
+					else:
+						text = text[:offset] + s + text[offset:]
+						start = offset
+					sel = comp.readingSelectionOffsets if comp.isReading else comp.compositionSelectionOffsets
+					pos = sel[0] if 0 < sel[0] <= len(s) else len(s)
+					caretValue = (start + pos, start, start + len(s))
+		except Exception:
+			log.debugWarning("largePrint: 讀組字失敗", exc_info=True)
+		self._editLine = (text, caretValue)
+		if not text.strip():
+			# 空白行（例如剛按 Enter）：大字顯示空的一行和游標，NVDA 念的「空白」放狀態列
+			info = f"{info} {fallback}".strip() if fallback else (info or "空白行")
+		# 同一行（打字、左右移動）只更新最新一句，不灌滿回顧；換行才算新的一句
+		sameLine = False
+		if self._lastLine is not None and self.history and self.browseIndex is None:
+			try:
+				sameLine = line.compareEndPoints(self._lastLine, "startToStart") == 0
+			except Exception:
+				sameLine = False
+		if sameLine or (self._candEntry and self.history and self.browseIndex is None):
+			self.history[-1] = (text, info, caretValue)
+		else:
+			self.history.append((text, info, caretValue))
+		self._lastLine = line
+		self._candEntry = False
+		self.browseIndex = None
+		self.pageIndex = 0
+		self._jumpToCaret = True
+		self._refresh()
+
 	def currentView(self):
+		"""(內容, 句數, 角色狀態位置資訊, 游標位置)"""
 		if not self.history:
-			return "", ""
+			return "", "", "", None
 		if self.browseIndex is None:
-			return self.history[-1], ""
-		return self.history[self.browseIndex], f"第 {self.browseIndex + 1}／{len(self.history)} 句"
+			text, info, caret = self.history[-1]
+			return text, "", info, caret
+		text, info, caret = self.history[self.browseIndex]
+		return text, f"第 {self.browseIndex + 1}／{len(self.history)} 句", info, caret
 
 	def _refresh(self):
 		if self.frame and self.shown:
@@ -612,6 +1326,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		else:
 			self._show()
 			self._message("大字開")
+
+	@script(description="大字顯示：檢查更新")
+	def script_checkUpdate(self, gesture):
+		checkForUpdate(silent=False)
 
 	@script(description="大字顯示：字放大")
 	def script_fontBigger(self, gesture):
