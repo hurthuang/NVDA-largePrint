@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+import builtins
 
 import addonHandler
 import config
@@ -36,33 +37,42 @@ from scriptHandler import script
 from speech.commands import CallbackCommand
 from speech.extensions import filter_speechSequence, pre_speech
 
-CATEGORY = "大字顯示"
+addonHandler.initTranslation()
+
+
+def _nvda(s):
+	"""NVDA 自己的翻譯（initTranslation 之後 _ 是附加元件的翻譯）。"""
+	return builtins._(s)
+
+
+# Translators: name of the add-on (settings category, input gestures category, window title)
+CATEGORY = _("Large Print")
 
 POSITIONS = [
-	("auto", "自動（避開焦點，放在上方或下方）"),
-	("follow", "跟著焦點浮動（放在焦點下方，放不下就上方）"),
-	("top", "固定在上方"),
-	("bottom", "固定在下方"),
+	("auto", _("Automatic (above or below, away from the focus)")),
+	("follow", _("Follow the focus (below it, or above if there is no room)")),
+	("top", _("Always at the top")),
+	("bottom", _("Always at the bottom")),
 ]
 SCHEMES = [
-	("yellowOnBlack", "黑底黃字", (0, 0, 0), (255, 255, 0)),
-	("whiteOnBlack", "黑底白字", (0, 0, 0), (255, 255, 255)),
-	("greenOnBlack", "黑底綠字", (0, 0, 0), (0, 255, 0)),
-	("blackOnWhite", "白底黑字", (255, 255, 255), (0, 0, 0)),
-	("blackOnYellow", "黃底黑字", (255, 255, 0), (0, 0, 0)),
-	("whiteOnBlue", "藍底白字", (0, 0, 128), (255, 255, 255)),
+	("yellowOnBlack", _("Yellow on black"), (0, 0, 0), (255, 255, 0)),
+	("whiteOnBlack", _("White on black"), (0, 0, 0), (255, 255, 255)),
+	("greenOnBlack", _("Green on black"), (0, 0, 0), (0, 255, 0)),
+	("blackOnWhite", _("Black on white"), (255, 255, 255), (0, 0, 0)),
+	("blackOnYellow", _("Black on yellow"), (255, 255, 0), (0, 0, 0)),
+	("whiteOnBlue", _("White on blue"), (0, 0, 128), (255, 255, 255)),
 ]
 DEFAULT_FACE = "Microsoft JhengHei"
 # 輸入法選字時大字顯示什麼
 CANDIDATES = [
-	("list", "候選字和編號"),
-	("words", "候選字和相關詞（跟 NVDA 念的一樣）"),
+	("list", _("Candidates and their numbers")),
+	("words", _("Candidates and related words (as NVDA speaks them)")),
 ]
 # 角色、狀態、位置資訊（標題、表格第幾列第幾欄、清單第幾項…）放哪裡
 STRUCTURES = [
-	("status", "放在狀態列（大字視窗最上面一行的小字）"),
-	("hide", "不顯示"),
-	("inline", "跟內容一起顯示"),
+	("status", _("In the status line (small text at the top of the window)")),
+	("hide", _("Hidden")),
+	("inline", _("With the content")),
 ]
 
 config.conf.spec["largePrint"] = {
@@ -110,7 +120,7 @@ def _checkUpdateWorker(silent=False):
 	"""silent=True 是啟動時自動檢查：沒有新版、連不上網路都不出聲。"""
 	if _fromStore():
 		if not silent:
-			wx.CallAfter(ui.message, "這個附加元件是從 NVDA 附加元件商店安裝的，請到附加元件商店更新。")
+			wx.CallAfter(ui.message, _("This add-on was installed from the NVDA Add-on Store. Please update it there."))
 		return
 	current = _currentVersion()
 	req = urllib.request.Request(
@@ -122,17 +132,19 @@ def _checkUpdateWorker(silent=False):
 			data = json.loads(resp.read().decode("utf-8"))
 	except Exception as e:
 		if not silent:
-			wx.CallAfter(ui.message, f"檢查更新失敗：{e}")
+			wx.CallAfter(ui.message, _("Update check failed: {error}").format(error=e))
 		return
 	if not data.get("tag_name"):
 		# 例如 GitHub 查詢次數超過上限，回的是錯誤訊息，不是版本
 		if not silent:
-			wx.CallAfter(ui.message, f"檢查更新失敗：{data.get('message', '沒有拿到版本資訊')}")
+			wx.CallAfter(ui.message, _("Update check failed: {error}").format(
+				error=data.get("message", _("no version information"))
+			))
 		return
 	latest = data["tag_name"].lstrip("vV")
 	if _parseVersion(latest) <= _parseVersion(current):
 		if not silent:
-			wx.CallAfter(ui.message, f"目前已是最新版本（v{current}）。")
+			wx.CallAfter(ui.message, _("You have the latest version (v{current}).").format(current=current))
 		return
 	assetUrl = None
 	for asset in data.get("assets", []):
@@ -146,17 +158,21 @@ def _promptUpdate(latest, current, assetUrl, releaseUrl):
 	"""主執行緒問使用者；按是才下載，交給 NVDA 原本的安裝流程。"""
 	if not assetUrl:
 		ui.browseableMessage(
-			f"有新版本可更新：v{latest}（目前使用：v{current}）\n\n下載頁面：\n{releaseUrl}",
-			"大字顯示有新版本",
+			_("A new version is available: v{latest} (you have v{current}).\n\nDownload page:\n{url}").format(
+				latest=latest, current=current, url=releaseUrl
+			),
+			_("Large Print update"),
 		)
 		return
 	result = gui.messageBox(
-		f"大字顯示有新版本 v{latest}（目前使用：v{current}）。\n\n是否立即下載並安裝？",
-		"大字顯示有新版本",
+		_("Large Print v{latest} is available (you have v{current}).\n\nDownload and install it now?").format(
+			latest=latest, current=current
+		),
+		_("Large Print update"),
 		wx.YES_NO | wx.ICON_QUESTION,
 	)
 	if result == wx.YES:
-		ui.message("正在下載更新…")
+		ui.message(_("Downloading the update…"))
 		threading.Thread(target=_downloadAndInstallWorker, args=(assetUrl,), daemon=True).start()
 
 
@@ -166,14 +182,14 @@ def _downloadAndInstallWorker(assetUrl):
 		with urllib.request.urlopen(req, timeout=30) as resp:
 			content = resp.read()
 	except Exception as e:
-		wx.CallAfter(ui.message, f"下載更新失敗：{e}")
+		wx.CallAfter(ui.message, _("Downloading the update failed: {error}").format(error=e))
 		return
 	tmpPath = os.path.join(tempfile.gettempdir(), "largePrint-update.nvda-addon")
 	try:
 		with open(tmpPath, "wb") as f:
 			f.write(content)
 	except Exception as e:
-		wx.CallAfter(ui.message, f"儲存更新檔失敗：{e}")
+		wx.CallAfter(ui.message, _("Saving the update failed: {error}").format(error=e))
 		return
 	# 交給系統開啟，跑 NVDA 原本的附加元件安裝確認
 	wx.CallAfter(os.startfile, tmpPath)
@@ -241,7 +257,7 @@ def _fmtRe(fmt, subs=None):
 
 def _plurals(singular, plural):
 	"""ngettext 的單數、複數兩種翻譯。"""
-	return {ngettext(singular, plural, 1), ngettext(singular, plural, 2)}  # noqa: F821（NVDA 內建）
+	return {builtins.ngettext(singular, plural, 1), builtins.ngettext(singular, plural, 2)}
 
 
 def _buildNoise():
@@ -270,7 +286,7 @@ def _buildNoise():
 				words.add(cur.displayString)
 	except Exception:
 		pass
-	for s in (_("out of table"), _("has details")):
+	for s in (_nvda("out of table"), _nvda("has details")):
 		words.add(s)
 	for state in controlTypes.State:
 		# 沒有翻譯的狀態會在 nvda.log 記錯誤，先查有沒有標籤
@@ -290,22 +306,22 @@ def _buildNoise():
 	rowCount = "(?:" + "|".join(_fmtRe(f) for f in _plurals("{rowCount} row", "{rowCount} rows")) + ")"
 	colCount = "(?:" + "|".join(_fmtRe(f) for f in _plurals("{columnCount} column", "{columnCount} columns")) + ")"
 	pats = [
-		_fmtRe(_("{number} of {total}")),
-		_fmtRe(_("level %s")),
-		_fmtRe(_("heading level %d")),
-		_fmtRe(_("row %s")),
-		_fmtRe(_("column %s")),
-		_fmtRe(_("through {endRow}")),
-		_fmtRe(_("through {endCol}")),
-		_fmtRe(_("through row {row} column {column}")),
-		_fmtRe(_("column {0} of {1}")),
-		_fmtRe(_("with {rowCountTranslation} and {colCountTranslation}"),
+		_fmtRe(_nvda("{number} of {total}")),
+		_fmtRe(_nvda("level %s")),
+		_fmtRe(_nvda("heading level %d")),
+		_fmtRe(_nvda("row %s")),
+		_fmtRe(_nvda("column %s")),
+		_fmtRe(_nvda("through {endRow}")),
+		_fmtRe(_nvda("through {endCol}")),
+		_fmtRe(_nvda("through row {row} column {column}")),
+		_fmtRe(_nvda("column {0} of {1}")),
+		_fmtRe(_nvda("with {rowCountTranslation} and {colCountTranslation}"),
 			{"rowCountTranslation": rowCount, "colCountTranslation": colCount}),
-		_fmtRe(_("table with {columnCountText} and {rowCountText}"),
+		_fmtRe(_nvda("table with {columnCountText} and {rowCountText}"),
 			{"columnCountText": colCount, "rowCountText": rowCount}),
 		# 離開清單、離開 導覽 地標（roleText 用空格接起來）
-		_fmtRe(_("out of %s"), {"%s": f"{roles}(?: {roles})*"}),
-		_fmtRe(_("has %s"), {"%s": roles}),
+		_fmtRe(_nvda("out of %s"), {"%s": f"{roles}(?: {roles})*"}),
+		_fmtRe(_nvda("has %s"), {"%s": roles}),
 	]
 	for singular, plural in (
 		("with %s column", "with %s columns"),
@@ -461,7 +477,7 @@ class BigTextFrame(wx.Frame):
 	def __init__(self, plugin):
 		super().__init__(
 			None,
-			title="大字顯示",
+			title=CATEGORY,
 			style=wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR | wx.FRAME_TOOL_WINDOW | wx.BORDER_NONE,
 		)
 		self.plugin = plugin
@@ -594,7 +610,7 @@ class BigTextFrame(wx.Frame):
 		# 組字中的字畫底線、選到的候選字反白：[(這一頁第幾行, 從第幾個字, 到第幾個字)]
 		self.compMarks = self._marks(text, lines, compSpan, perPage, page)
 		self.selMarks = self._marks(text, lines, selSpan, perPage, page)
-		parts = [s for s in (sentStatus, f"第 {page + 1}／{len(pages)} 頁" if len(pages) > 1 else "") if s]
+		parts = [s for s in (sentStatus, _("page {page}/{count}").format(page=page + 1, count=len(pages)) if len(pages) > 1 else "") if s]
 		self.status = "　".join(parts)
 		# 狀態列一直留著：組字的注音、角色資訊一下有一下沒有時，視窗高度才不會跟著變
 		self.statusH = statusLineH
@@ -681,52 +697,52 @@ class BigTextFrame(wx.Frame):
 
 
 class BigTextSettingsPanel(SettingsPanel):
-	title = "大字顯示"
+	title = CATEGORY
 
 	def makeSettings(self, settingsSizer):
 		h = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
 		c = conf()
-		self.position = h.addLabeledControl("位置(&P):", wx.Choice, choices=[label for _k, label in POSITIONS])
+		self.position = h.addLabeledControl(_("&Position:"), wx.Choice, choices=[label for _k, label in POSITIONS])
 		keys = [k for k, _label in POSITIONS]
 		self.position.SetSelection(keys.index(c["position"]) if c["position"] in keys else 0)
 		self.height = h.addLabeledControl(
-			"最高佔螢幕的百分比(&H):", nvdaControls.SelectOnFocusSpinCtrl,
+			_("Maximum &height (percent of the screen):"), nvdaControls.SelectOnFocusSpinCtrl,
 			min=20, max=100, initial=c["heightPercent"],
 		)
 		self.size = h.addLabeledControl(
-			"字的大小（像素）(&S):", nvdaControls.SelectOnFocusSpinCtrl,
+			_("Text &size (pixels):"), nvdaControls.SelectOnFocusSpinCtrl,
 			min=16, max=800, initial=c["fontSize"],
 		)
 		faces = sorted({f for f in wx.FontEnumerator.GetFacenames() if not f.startswith("@")}, key=str.lower)
 		if c["fontFace"] not in faces:
 			faces.insert(0, c["fontFace"])
 		self.faces = faces
-		self.face = h.addLabeledControl("字型(&F):", wx.Choice, choices=faces)
+		self.face = h.addLabeledControl(_("&Font:"), wx.Choice, choices=faces)
 		self.face.SetSelection(faces.index(c["fontFace"]))
-		self.bold = h.addItem(wx.CheckBox(self, label="粗體(&B)"))
+		self.bold = h.addItem(wx.CheckBox(self, label=_("&Bold")))
 		self.bold.SetValue(c["bold"])
-		self.scheme = h.addLabeledControl("配色(&C):", wx.Choice, choices=[s[1] for s in SCHEMES])
+		self.scheme = h.addLabeledControl(_("&Colors:"), wx.Choice, choices=[s[1] for s in SCHEMES])
 		skeys = [s[0] for s in SCHEMES]
 		self.scheme.SetSelection(skeys.index(c["colors"]) if c["colors"] in skeys else 0)
 		self.opacity = h.addLabeledControl(
-			"不透明度（百分比，100＝不透明）(&T):", nvdaControls.SelectOnFocusSpinCtrl,
+			_("Opaci&ty (percent, 100 = opaque):"), nvdaControls.SelectOnFocusSpinCtrl,
 			min=50, max=100, initial=c["opacity"],
 		)
 		self.structure = h.addLabeledControl(
-			"標題層級、表格欄列等位置資訊(&I):", wx.Choice, choices=[label for _k, label in STRUCTURES],
+			_("Heading levels, table rows and columns and other position &information:"), wx.Choice, choices=[label for _k, label in STRUCTURES],
 		)
 		tkeys = [k for k, _label in STRUCTURES]
 		self.structure.SetSelection(tkeys.index(c["structure"]) if c["structure"] in tkeys else 0)
 		self.candidate = h.addLabeledControl(
-			"輸入法選字時顯示(&W):", wx.Choice, choices=[label for _k, label in CANDIDATES],
+			_("While choosing IME candidates, sho&w:"), wx.Choice, choices=[label for _k, label in CANDIDATES],
 		)
 		ckeys = [k for k, _label in CANDIDATES]
 		self.candidate.SetSelection(ckeys.index(c["candidateDisplay"]) if c["candidateDisplay"] in ckeys else 0)
-		self.speakOnPage = h.addItem(wx.CheckBox(self, label="翻頁時語音跟著念這一頁(&R)"))
+		self.speakOnPage = h.addItem(wx.CheckBox(self, label=_("&Read the page aloud when turning pages")))
 		self.speakOnPage.SetValue(c["speakOnPage"])
-		self.showOnStartup = h.addItem(wx.CheckBox(self, label="NVDA 啟動時開啟大字顯示(&O)"))
+		self.showOnStartup = h.addItem(wx.CheckBox(self, label=_("Sh&ow Large Print when NVDA starts")))
 		self.showOnStartup.SetValue(c["showOnStartup"])
-		updateButton = h.addItem(wx.Button(self, label="檢查更新(&U)"))
+		updateButton = h.addItem(wx.Button(self, label=_("Check for &updates")))
 		updateButton.Bind(wx.EVT_BUTTON, lambda evt: checkForUpdate(silent=False))
 
 	def onSave(self):
@@ -1235,7 +1251,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._editLine = (text, caretValue)
 		if not text.strip():
 			# 空白行（例如剛按 Enter）：大字顯示空的一行和游標，NVDA 念的「空白」放狀態列
-			info = f"{info} {fallback}".strip() if fallback else (info or "空白行")
+			info = f"{info} {fallback}".strip() if fallback else (info or _("blank line"))
 		# 同一行（打字、左右移動）只更新最新一句，不灌滿回顧；換行才算新的一句
 		sameLine = False
 		if self._lastLine is not None and self.history and self.browseIndex is None:
@@ -1262,7 +1278,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			text, info, caret = self.history[-1]
 			return text, "", info, caret
 		text, info, caret = self.history[self.browseIndex]
-		return text, f"第 {self.browseIndex + 1}／{len(self.history)} 句", info, caret
+		return text, _("item {index}/{count}").format(index=self.browseIndex + 1, count=len(self.history)), info, caret
 
 	def _refresh(self):
 		if self.frame and self.shown:
@@ -1318,24 +1334,25 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 				pass
 		self._resumeMagnifier()
 
-	@script(description="開關大字顯示", gesture="kb:NVDA+shift+z")
+	# Translators: input gesture description
+	@script(description=_("Shows or hides Large Print"), gesture="kb:NVDA+shift+z")
 	def script_toggle(self, gesture):
 		if self.shown:
 			self._hide()
-			self._message("大字關")
+			self._message(_("Large Print off"))
 		else:
 			self._show()
-			self._message("大字開")
+			self._message(_("Large Print on"))
 
-	@script(description="大字顯示：檢查更新")
+	@script(description=_("Checks for Large Print updates"))
 	def script_checkUpdate(self, gesture):
 		checkForUpdate(silent=False)
 
-	@script(description="大字顯示：字放大")
+	@script(description=_("Makes the large print text bigger"))
 	def script_fontBigger(self, gesture):
 		self._resize(1.15)
 
-	@script(description="大字顯示：字縮小")
+	@script(description=_("Makes the large print text smaller"))
 	def script_fontSmaller(self, gesture):
 		self._resize(1 / 1.15)
 
@@ -1346,7 +1363,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self.pageIndex = 0
 		self._refresh()
 
-	@script(description="大字顯示：往前（上一頁，到第一頁再到上一句）")
+	@script(description=_("Large Print: previous page, or the previous item on the first page"))
 	def script_previous(self, gesture):
 		if not self.history:
 			return
@@ -1362,7 +1379,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self.pageIndex = -1
 		self._turned()
 
-	@script(description="大字顯示：往後（下一頁，到最後一頁再到下一句）")
+	@script(description=_("Large Print: next page, or the next item on the last page"))
 	def script_next(self, gesture):
 		if not self.history:
 			return

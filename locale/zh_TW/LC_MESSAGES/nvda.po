@@ -1,0 +1,154 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: largePrint 1.0.0\n"
+"Language: zh_TW\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Large Print"
+msgstr "大字顯示"
+
+msgid "Automatic (above or below, away from the focus)"
+msgstr "自動（避開焦點，放在上方或下方）"
+
+msgid "Follow the focus (below it, or above if there is no room)"
+msgstr "跟著焦點浮動（放在焦點下方，放不下就上方）"
+
+msgid "Always at the top"
+msgstr "固定在上方"
+
+msgid "Always at the bottom"
+msgstr "固定在下方"
+
+msgid "Yellow on black"
+msgstr "黑底黃字"
+
+msgid "White on black"
+msgstr "黑底白字"
+
+msgid "Green on black"
+msgstr "黑底綠字"
+
+msgid "Black on white"
+msgstr "白底黑字"
+
+msgid "Black on yellow"
+msgstr "黃底黑字"
+
+msgid "White on blue"
+msgstr "藍底白字"
+
+msgid "Candidates and their numbers"
+msgstr "候選字和編號"
+
+msgid "Candidates and related words (as NVDA speaks them)"
+msgstr "候選字和相關詞（跟 NVDA 念的一樣）"
+
+msgid "In the status line (small text at the top of the window)"
+msgstr "放在狀態列（大字視窗最上面一行的小字）"
+
+msgid "Hidden"
+msgstr "不顯示"
+
+msgid "With the content"
+msgstr "跟內容一起顯示"
+
+msgid "This add-on was installed from the NVDA Add-on Store. Please update it there."
+msgstr "這個附加元件是從 NVDA 附加元件商店安裝的，請到附加元件商店更新。"
+
+msgid "Update check failed: {error}"
+msgstr "檢查更新失敗：{error}"
+
+msgid "no version information"
+msgstr "沒有拿到版本資訊"
+
+msgid "You have the latest version (v{current})."
+msgstr "目前已是最新版本（v{current}）。"
+
+msgid "A new version is available: v{latest} (you have v{current}).\n\nDownload page:\n{url}"
+msgstr "有新版本可更新：v{latest}（目前使用：v{current}）\n\n下載頁面：\n{url}"
+
+msgid "Large Print update"
+msgstr "大字顯示有新版本"
+
+msgid "Large Print v{latest} is available (you have v{current}).\n\nDownload and install it now?"
+msgstr "大字顯示有新版本 v{latest}（目前使用：v{current}）。\n\n是否立即下載並安裝？"
+
+msgid "Downloading the update…"
+msgstr "正在下載更新…"
+
+msgid "Downloading the update failed: {error}"
+msgstr "下載更新失敗：{error}"
+
+msgid "Saving the update failed: {error}"
+msgstr "儲存更新檔失敗：{error}"
+
+msgid "page {page}/{count}"
+msgstr "第 {page}／{count} 頁"
+
+msgid "&Position:"
+msgstr "位置(&P):"
+
+msgid "Maximum &height (percent of the screen):"
+msgstr "最高佔螢幕的百分比(&H):"
+
+msgid "Text &size (pixels):"
+msgstr "字的大小（像素）(&S):"
+
+msgid "&Font:"
+msgstr "字型(&F):"
+
+msgid "&Bold"
+msgstr "粗體(&B)"
+
+msgid "&Colors:"
+msgstr "配色(&C):"
+
+msgid "Opaci&ty (percent, 100 = opaque):"
+msgstr "不透明度（百分比，100＝不透明）(&T):"
+
+msgid "Heading levels, table rows and columns and other position &information:"
+msgstr "標題層級、表格欄列等位置資訊(&I):"
+
+msgid "While choosing IME candidates, sho&w:"
+msgstr "輸入法選字時顯示(&W):"
+
+msgid "&Read the page aloud when turning pages"
+msgstr "翻頁時語音跟著念這一頁(&R)"
+
+msgid "Sh&ow Large Print when NVDA starts"
+msgstr "NVDA 啟動時開啟大字顯示(&O)"
+
+msgid "Check for &updates"
+msgstr "檢查更新(&U)"
+
+msgid "blank line"
+msgstr "空白行"
+
+msgid "item {index}/{count}"
+msgstr "第 {index}／{count} 句"
+
+msgid "Shows or hides Large Print"
+msgstr "開關大字顯示"
+
+msgid "Large Print off"
+msgstr "大字關"
+
+msgid "Large Print on"
+msgstr "大字開"
+
+msgid "Checks for Large Print updates"
+msgstr "檢查更新"
+
+msgid "Makes the large print text bigger"
+msgstr "字放大"
+
+msgid "Makes the large print text smaller"
+msgstr "字縮小"
+
+msgid "Large Print: previous page, or the previous item on the first page"
+msgstr "往前（上一頁，到第一頁再到上一句）"
+
+msgid "Large Print: next page, or the next item on the last page"
+msgstr "往後（下一頁，到最後一頁再到下一句）"
