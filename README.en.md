@@ -7,6 +7,8 @@ An add-on for the NVDA screen reader. It redraws what NVDA is speaking in large 
 
 When a magnifier zooms in a lot, text gets blurry because it is enlarging characters that were only a dozen or so pixels tall. Large Print does not zoom the screen. It draws the text again, in the font and size you choose, so it stays sharp however big it gets. It is meant for people with low vision who use NVDA.
 
+![Typing Chinese with Zhuyin in Word: Large Print shows the whole line "今天天氣很好，很適合" with the character being chosen, "合", highlighted. The next line lists the candidates 1合 2和 3何 4河 5核 6盒 7荷 with the selected one highlighted, and the status line at the top shows the related word "合作" in small text.](pic/type.jpg)
+
 ## Features
 
 * **Follows speech**: the large print shows the sentence NVDA is speaking. During say all (NVDA+Down arrow) it moves along with the speech.
@@ -18,6 +20,8 @@ When a magnifier zooms in a lot, text gets blurry because it is enlarging charac
 * **Stays out of the way**: the window never takes the focus and mouse clicks pass through it, so you keep using your programs as usual. Its height follows the amount of text, and it can move itself away from the focus.
 * **Mouse tracking**: when NVDA's mouse tracking is on (NVDA+M), whatever the mouse points at is shown in large print too, even while the focus is in an edit field. When the mouse moves into the large print window, the window moves to the other half of the screen so it does not cover what you are pointing at.
 * **Works with NVDA's magnifier**: while Large Print is shown, NVDA's magnifier is paused (otherwise it would magnify the large print and blur it again). It resumes when Large Print is hidden.
+
+![Reading a GitHub page with NVDA: the sentence being spoken is shown in large yellow-on-black text across the middle of the screen, semi-transparent, with the original web page visible behind it.](pic/read.jpg)
 
 ## Requirements
 
