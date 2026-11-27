@@ -63,6 +63,8 @@ SCHEMES = [
 	("whiteOnBlue", _("White on blue"), (0, 0, 128), (255, 255, 255)),
 ]
 DEFAULT_FACE = "Microsoft JhengHei"
+# 滑鼠移動後幾秒內，大字視窗照滑鼠的位置避開（之後換焦點、移動游標就回到照焦點）
+MOUSE_RECENT = 3.0
 # 輸入法選字時大字顯示什麼
 CANDIDATES = [
 	("list", _("Candidates and their numbers")),
@@ -515,6 +517,13 @@ class BigTextFrame(wx.Frame):
 		if _composing() and self._lastY is not None:
 			# 輸入法組字時游標位置不準，視窗留在原地不跳
 			return min(max(top, self._lastY), bottom)
+		mouseY = self.plugin._recentMouseY()
+		if mouseY is not None:
+			# 跟隨滑鼠朗讀：避開滑鼠。沒擋到就不動，滑鼠進到視窗範圍才換到另一半（不然會跟著滑鼠跳來跳去）
+			if self._lastY is not None and not (self._lastY <= mouseY < self._lastY + h):
+				return min(max(top, self._lastY), bottom)
+			self.atTop = mouseY > geo.y + geo.height // 2
+			return top if self.atTop else bottom
 		span = focusSpan()
 		if mode == "follow" and span:
 			fTop, fBottom = span
@@ -793,6 +802,10 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		self._editLine = None  # 最近一次顯示的編輯區那一行 (文字, 游標)，選字時放在上面
 		self._candEntry = False  # 最新一句是選字的顯示
 		self._focusAt = 0.0
+		self._mouseY = None  # 跟隨滑鼠朗讀：最近一次滑鼠的 y
+		self._mouseAt = 0.0
+		self._inMouse = False  # 正在處理滑鼠移動（這時念的字是滑鼠指到的）
+		self._rawMouse = False
 		self._roleWords = set()
 		for role in controlTypes.Role:
 			try:
@@ -940,11 +953,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 					parts.append(s)
 		flush()
 		self._raw = [(t, info) for _i, t, info in segments]
+		mouse = self._rawMouse = self._inMouse
 		if not segments:
 			return seq
 		out = list(seq)
 		for pos, text, info in reversed(segments):
-			out.insert(pos, CallbackCommand(lambda t=text, f=info: self._spoken(t, f), name="largePrint:segment"))
+			out.insert(pos, CallbackCommand(lambda t=text, f=info: self._spoken(t, f, mouse), name="largePrint:segment"))
 		return out
 
 	def _speechIsAudible(self):
@@ -966,7 +980,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if self._speechIsAudible():
 			return  # 念到每一段時由 CallbackCommand 換大字
 		# 語音關掉、隨選模式、語音引擎不回報進度：直接顯示
-		if self._editLineMode() and not self._isFocusSpeech(segments[-1][1]):
+		if not self._rawMouse and self._editLineMode() and not self._isFocusSpeech(segments[-1][1]):
 			text, info = segments[-1]
 			self._scheduleCaretLine(info, text)
 			return
@@ -975,10 +989,11 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if self.shown:
 			wx.CallAfter(self._refresh)
 
-	def _spoken(self, text, info=""):
+	def _spoken(self, text, info="", mouse=False):
 		if self._suppress:
 			return
-		if self._editLineMode() and not self._isFocusSpeech(info):
+		# 滑鼠指到的（跟隨滑鼠朗讀）照念的顯示，焦點在編輯區也一樣
+		if not mouse and self._editLineMode() and not self._isFocusSpeech(info):
 			# 編輯區（打字、輸入法送字、方向鍵）：不顯示念的那一個字，改顯示游標那一行
 			self._scheduleCaretLine(info, text)
 			return
@@ -1053,6 +1068,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		return bool(info) and any(w in self._roleWords for w in info.split())
 
 	def event_gainFocus(self, obj, nextHandler):
+		self._mouseAt = 0
 		if _isCandidate(obj):
 			# 選字：NVDA 念的字詞解釋不收，改顯示文件那一行＋這一頁的候選字
 			self._suppress += 1
@@ -1186,13 +1202,42 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		except Exception:
 			log.debugWarning("largePrint: 排游標行失敗", exc_info=True)
 
+	def event_mouseMove(self, obj, nextHandler, x, y):
+		# 跟隨滑鼠朗讀開著才有這個事件；這時念的是滑鼠指到的東西
+		self._inMouse = True
+		try:
+			nextHandler()
+		finally:
+			self._inMouse = False
+		self._mouseY = y
+		self._mouseAt = time.time()
+		# 滑鼠移進大字視窗：馬上換邊，不要擋住滑鼠指的地方
+		frame = self.frame
+		if not (self.shown and frame and frame.IsShown()) or conf()["position"] not in ("auto", "follow"):
+			return
+		r = frame.GetRect()
+		if not (r.y <= y < r.y + r.height):
+			return
+		geo = wx.Display(0).GetGeometry()
+		if frame.atTop == (y > geo.y + geo.height // 2) and frame._lastY in (geo.y, geo.y + geo.height - r.height):
+			return  # 已經在另一半了（視窗很高時兩邊都會擋到），不用每動一下就重排
+		frame.update()
+
+	def _recentMouseY(self):
+		"""最近在用滑鼠（剛移動過、之後沒有換焦點或移動游標）就傳回滑鼠的 y，不然 None。"""
+		if self._mouseY is not None and time.time() - self._mouseAt < MOUSE_RECENT:
+			return self._mouseY
+		return None
+
 	def event_typedCharacter(self, obj, nextHandler, ch):
+		self._mouseAt = 0
 		nextHandler()
 		if self._editLineMode():
 			self._scheduleCaretLine()
 
 	def event_caret(self, obj, nextHandler):
 		# 打字、輸入法送字、方向鍵都會移動游標（打字回音、游標朗讀關掉時也跟著）
+		self._mouseAt = 0
 		nextHandler()
 		# 剛換焦點時的游標事件不算，保留 NVDA 念的欄位名稱
 		if time.time() - self._focusAt > 0.5 and self._editLineMode():

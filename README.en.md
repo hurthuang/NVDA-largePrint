@@ -16,6 +16,7 @@ When a magnifier zooms in a lot, text gets blurry because it is enlarging charac
 * **Content and position information kept apart**: the large print holds only the content. Information such as "heading level 2", "row 2", "column 3", "button" or "checked" goes in a line of small text at the top of the window (the status line), so you can see where you are without it taking up space. NVDA's own messages are not shown.
 * **Page through and review**: content that does not fit can be paged through, and you can go back to earlier sentences (up to 200). The page can be read aloud as you turn to it. In a document, moving past the newest sentence reads the next line.
 * **Stays out of the way**: the window never takes the focus and mouse clicks pass through it, so you keep using your programs as usual. Its height follows the amount of text, and it can move itself away from the focus.
+* **Mouse tracking**: when NVDA's mouse tracking is on (NVDA+M), whatever the mouse points at is shown in large print too, even while the focus is in an edit field. When the mouse moves into the large print window, the window moves to the other half of the screen so it does not cover what you are pointing at.
 * **Works with NVDA's magnifier**: while Large Print is shown, NVDA's magnifier is paused (otherwise it would magnify the large print and blur it again). It resumes when Large Print is hidden.
 
 ## Requirements
