@@ -37,6 +37,8 @@ from scriptHandler import script
 from speech.commands import CallbackCommand
 from speech.extensions import filter_speechSequence, pre_speech
 
+from . import zhuyin
+
 addonHandler.initTranslation()
 
 
@@ -89,6 +91,7 @@ config.conf.spec["largePrint"] = {
 	"opacity": "integer(default=80, min=50, max=100)",
 	"structure": "string(default=status)",
 	"candidateDisplay": "string(default=list)",
+	"zhuyin": "boolean(default=False)",
 }
 
 # ---- 檢查更新（跟作者其他附加元件同一套做法）----
@@ -419,9 +422,16 @@ def wrapText(dc, text, maxWidth, keepSpaces=False):
 	return lines
 
 
-def makeFont(px):
+def zhuyinOn():
+	"""設定開了注音，而且附的注音字型載入成功。"""
+	return conf()["zhuyin"] and zhuyin.loadFont()
+
+
+def makeFont(px, main=False):
+	"""main：大字本文（開了注音就用注音字型）；狀態列用設定的字型。"""
 	bold = conf()["bold"]
-	font = wx.Font(wx.FontInfo(wx.Size(0, px)).FaceName(conf()["fontFace"]).Bold(bold))
+	face = zhuyin.FACE if main and zhuyinOn() else conf()["fontFace"]
+	font = wx.Font(wx.FontInfo(wx.Size(0, px)).FaceName(face).Bold(bold))
 	if not font.IsOk():
 		font = wx.Font(wx.FontInfo(wx.Size(0, px)).FaceName(DEFAULT_FACE).Bold(bold))
 	return font
@@ -490,6 +500,7 @@ class BigTextFrame(wx.Frame):
 		self.caretPos = None  # (這一頁第幾行, 第幾個字)
 		self.compMarks = []
 		self.selMarks = []
+		self.pageGlyphs = None  # 注音：每一行要換字形的字 {第幾個字: 字形編號}
 		self._lastY = None
 		self.statusPx = 16
 		self.lineH = 0
@@ -568,7 +579,7 @@ class BigTextFrame(wx.Frame):
 		self.fontPx = size
 		self.margin = margin = max(8, size // 8)
 		dc = wx.ScreenDC()
-		dc.SetFont(makeFont(size))
+		dc.SetFont(makeFont(size, main=True))
 		self.lineH = int(dc.GetTextExtent("國")[1] * 1.15)
 		compSpan = selSpan = None
 		if isinstance(caret, tuple):
@@ -613,6 +624,7 @@ class BigTextFrame(wx.Frame):
 			page = len(pages) - 1 if page < 0 else 0
 		self.plugin.pageIndex = page
 		self.pageLines = pages[page]
+		self.pageGlyphs = self._glyphs(lines, page * perPage, len(self.pageLines)) if zhuyinOn() else None
 		self.caretPos = None
 		if loc and loc[0] // perPage == page:
 			self.caretPos = (loc[0] - page * perPage, loc[1])
@@ -635,6 +647,37 @@ class BigTextFrame(wx.Frame):
 		if not self.IsShown():
 			self.ShowWithoutActivating()
 		self.Refresh()
+
+	@staticmethod
+	def _glyphs(lines, first, n):
+		"""注音：這一頁每一行的破音字要畫哪個字形。前後行各帶幾個字當上下文（詞可能被斷行切開）。"""
+		out = []
+		for li in range(first, first + n):
+			prev = lines[li - 1][-6:] if li > 0 else ""
+			nxt = lines[li + 1][:6] if li + 1 < len(lines) else ""
+			line = lines[li]
+			g = zhuyin.glyphs(prev + line + nxt)
+			out.append({p - len(prev): v for p, v in g.items() if len(prev) <= p < len(prev) + len(line)})
+		return out
+
+	def _drawRun(self, dc, line, li, c0, c1, m, y):
+		"""畫這一頁第 li 行的 line[c0:c1]（m 是行首的 x）。開了注音時，破音字改畫對應讀音的字形。"""
+		g = self.pageGlyphs[li] if self.pageGlyphs and li < len(self.pageGlyphs) else None
+		pts = sorted(p for p in g if c0 <= p < c1) if g else []
+		if not pts:
+			dc.DrawText(line[c0:c1], m + dc.GetTextExtent(line[:c0])[0], y)
+			return
+		colour = dc.GetTextForeground()
+		start = c0
+		for p in pts:
+			if p > start:
+				dc.DrawText(line[start:p], m + dc.GetTextExtent(line[:start])[0], y)
+			x = m + dc.GetTextExtent(line[:p])[0]
+			if not zhuyin.drawGlyph(dc, g[p], x, y, colour):
+				dc.DrawText(line[p], x, y)
+			start = p + 1
+		if start < c1:
+			dc.DrawText(line[start:c1], m + dc.GetTextExtent(line[:start])[0], y)
 
 	def onPaint(self, evt):
 		dc = wx.AutoBufferedPaintDC(self)
@@ -659,11 +702,11 @@ class BigTextFrame(wx.Frame):
 						info = info[:-1]
 					info += "…"
 				dc.DrawText(info, m, m // 2)
-		dc.SetFont(makeFont(self.fontPx))
+		dc.SetFont(makeFont(self.fontPx, main=True))
 		dc.SetTextForeground(fg)
 		y = m + self.statusH
 		for i, line in enumerate(self.pageLines):
-			dc.DrawText(line, m, y)
+			self._drawRun(dc, line, i, 0, len(line), m, y)
 			for li, c0, c1 in self.selMarks:
 				if li == i:
 					# 選到的候選字：反白
@@ -674,7 +717,7 @@ class BigTextFrame(wx.Frame):
 					dc.SetBrush(wx.Brush(fg))
 					dc.DrawRectangle(x0, y, sw, sh)
 					dc.SetTextForeground(bg)
-					dc.DrawText(seg, x0, y)
+					self._drawRun(dc, line, i, c0, c1, m, y)
 					dc.SetTextForeground(fg)
 			for li, c0, c1 in self.compMarks:
 				if li == i:
@@ -696,7 +739,7 @@ class BigTextFrame(wx.Frame):
 					dc.SetBrush(wx.Brush(fg))
 					dc.DrawRectangle(x, y, max(cw, self.fontPx // 3), chH)
 					dc.SetTextForeground(bg)
-					dc.DrawText(ch, x, y)
+					self._drawRun(dc, line, i, ci, ci + 1, m, y)
 					dc.SetTextForeground(fg)
 				else:
 					dc.SetPen(wx.TRANSPARENT_PEN)
@@ -730,6 +773,9 @@ class BigTextSettingsPanel(SettingsPanel):
 		self.face.SetSelection(faces.index(c["fontFace"]))
 		self.bold = h.addItem(wx.CheckBox(self, label=_("&Bold")))
 		self.bold.SetValue(c["bold"])
+		# Translators: setting; when on, Chinese characters are drawn with Zhuyin (Bopomofo) beside them using the bundled font
+		self.zhuyin = h.addItem(wx.CheckBox(self, label=_("Show &Zhuyin (Bopomofo) beside Chinese characters")))
+		self.zhuyin.SetValue(c["zhuyin"])
 		self.scheme = h.addLabeledControl(_("&Colors:"), wx.Choice, choices=[s[1] for s in SCHEMES])
 		skeys = [s[0] for s in SCHEMES]
 		self.scheme.SetSelection(skeys.index(c["colors"]) if c["colors"] in skeys else 0)
@@ -762,6 +808,9 @@ class BigTextSettingsPanel(SettingsPanel):
 		c["fontFace"] = self.faces[self.face.GetSelection()]
 		c["colors"] = SCHEMES[self.scheme.GetSelection()][0]
 		c["bold"] = self.bold.GetValue()
+		c["zhuyin"] = self.zhuyin.GetValue()
+		if c["zhuyin"]:
+			zhuyin.preload()
 		c["opacity"] = self.opacity.GetValue()
 		c["structure"] = STRUCTURES[self.structure.GetSelection()][0]
 		c["candidateDisplay"] = CANDIDATES[self.candidate.GetSelection()][0]
@@ -813,6 +862,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			except Exception:
 				pass
 		self._roleWords.discard("")
+		if conf()["zhuyin"]:
+			zhuyin.preload()
 		self._quietIds = {inputCore.normalizeGestureIdentifier(g) for g in self._shownGestures}
 		try:
 			self._noiseWords, self._noiseRe = _buildNoise()
@@ -922,6 +973,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		if self.frame:
 			self.frame.Destroy()
 			self.frame = None
+		zhuyin.unloadFont()
 		_plugin = None
 		super().terminate()
 

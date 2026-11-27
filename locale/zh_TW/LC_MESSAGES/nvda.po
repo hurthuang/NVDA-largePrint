@@ -1,6 +1,6 @@
 msgid ""
 msgstr ""
-"Project-Id-Version: largePrint 1.0.1\n"
+"Project-Id-Version: largePrint 1.1.0\n"
 "Language: zh_TW\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -101,6 +101,9 @@ msgstr "字型(&F):"
 
 msgid "&Bold"
 msgstr "粗體(&B)"
+
+msgid "Show &Zhuyin (Bopomofo) beside Chinese characters"
+msgstr "國字旁邊標注音(&Z)"
 
 msgid "&Colors:"
 msgstr "配色(&C):"

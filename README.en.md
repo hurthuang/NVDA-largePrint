@@ -20,6 +20,7 @@ When a magnifier zooms in a lot, text gets blurry because it is enlarging charac
 * **Stays out of the way**: the window never takes the focus and mouse clicks pass through it, so you keep using your programs as usual. Its height follows the amount of text, and it can move itself away from the focus.
 * **Mouse tracking**: when NVDA's mouse tracking is on (NVDA+M), whatever the mouse points at is shown in large print too, even while the focus is in an edit field. When the mouse moves into the large print window, the window moves to the other half of the screen so it does not cover what you are pointing at.
 * **Works with NVDA's magnifier**: while Large Print is shown, NVDA's magnifier is paused (otherwise it would magnify the large print and blur it again). It resumes when Large Print is hidden.
+* **Zhuyin for Chinese characters** (a setting): Zhuyin (Bopomofo) is drawn vertically to the right of each character, as in Taiwanese school books. For characters with several readings, the reading is chosen from the context. See *Zhuyin* below.
 
 ![Reading a GitHub page with NVDA: the sentence being spoken is shown in large yellow-on-black text across the middle of the screen, semi-transparent, with the original web page visible behind it.](pic/read.jpg)
 
@@ -54,6 +55,7 @@ NVDA menu → Preferences → Settings → **Large Print**:
 2. **Maximum height (percent of the screen)**: the window never grows taller than this; longer text is split into pages.
 3. **Text size (pixels)**.
 4. **Font**: Microsoft JhengHei by default. **Bold** can be turned on.
+   * **Show Zhuyin (Bopomofo) beside Chinese characters** (off by default): the large print uses the bundled Zhuyin font (the status line does not).
 5. **Colors**: yellow on black (default), white on black, green on black, black on white, black on yellow, white on blue.
    * **Opacity**: 50 to 100 (default 80; 100 is fully opaque). Lower values let you see the screen behind the window; the text fades along with the background.
 6. **Heading levels, table rows and columns and other position information**: in the status line (default), hidden, or with the content.
@@ -63,6 +65,14 @@ NVDA menu → Preferences → Settings → **Large Print**:
 8. **Read the page aloud when turning pages** (on by default).
 9. **Show Large Print when NVDA starts** (off by default).
 10. **Check for updates** button.
+
+## Zhuyin
+
+With **Show Zhuyin (Bopomofo) beside Chinese characters** on, the large print uses the Bpmf Iansui font, which draws Zhuyin to the right of each character. The font is bundled with the add-on and is only loaded for NVDA; nothing is installed.
+
+* For characters with several readings, the reading comes from a list of words based on the Ministry of Education's polyphone standard, then from word segmentation with the McBopomofo dictionary, and otherwise the most common reading is used.
+* The marking follows Taiwanese primary school books: 一 is marked with its changed tone (一條, 一大張), 不 with its original tone; 和 as a conjunction is ㄏㄢˋ; 得 after a verb (覺得, 跑得快) and 地 in 慢慢地 are neutral tone.
+* Checked against about 370 polyphones in a grade 2 Chinese textbook (Nan I, first semester): about 98% correct. Some readings will still be wrong; please report them on GitHub Issues.
 
 ## Updates
 
@@ -77,3 +87,9 @@ After NVDA starts, the add-on checks GitHub once in the background for a newer v
 ## License
 
 GPL v2. See [LICENSE](LICENSE).
+
+The Zhuyin font and data (`globalPlugins/largePrint/zhuyin/`, see README.txt there):
+
+* Bpmf Iansui by ButTaiwan ([bpmfvs](https://github.com/ButTaiwan/bpmfvs)): SIL Open Font License 1.1
+* Reading table and polyphone word list: from bpmfvs, Apache License 2.0
+* Dictionary: from [McBopomofo](https://github.com/openvanilla/McBopomofo), MIT License
