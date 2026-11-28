@@ -68,7 +68,9 @@ NVDA menu → Preferences → Settings → **Large Print**:
 
 ## Zhuyin
 
-With **Show Zhuyin (Bopomofo) beside Chinese characters** on, the large print uses the Bpmf Iansui font, which draws Zhuyin to the right of each character. The font is bundled with the add-on and is only loaded for NVDA; nothing is installed.
+With **Show Zhuyin (Bopomofo) beside Chinese characters** on, the large print uses the Bpmf Iansui font, which draws Zhuyin to the right of each character. The font is bundled with the add-on and is only loaded for NVDA; nothing is installed. If the option is off, the font and the dictionary are not loaded at all; they only make the download about 4.5 MB.
+
+![Reading the 1.1.0 release notes on GitHub with NVDA: the sentence is shown in large yellow-on-black text with Zhuyin drawn vertically to the right of each Chinese character, for example 設 (ㄕㄜˋ), 定 (ㄉㄧㄥˋ), 新 (ㄒㄧㄣ), 增 (ㄗㄥ). The status line at the top right shows "第 1／2 頁" (page 1/2) in small text. The web page is visible behind it.](pic/bpmf.png)
 
 * For characters with several readings, the reading comes from a list of words based on the Ministry of Education's polyphone standard, then from word segmentation with the McBopomofo dictionary, and otherwise the most common reading is used.
 * The marking follows Taiwanese primary school books: 一 is marked with its changed tone (一條, 一大張), 不 with its original tone; 和 as a conjunction is ㄏㄢˋ; 得 after a verb (覺得, 跑得快) and 地 in 慢慢地 are neutral tone.
